@@ -1,0 +1,22 @@
+{
+  "name": "bigukiuki-scrim-bot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Discord scrim matching bot for Railway.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "register": "node deploy-commands.js",
+    "register:global": "node deploy-commands.js global",
+    "register:guild": "node deploy-commands.js guild",
+    "invite": "node print-invite-url.js",
+    "check": "node --check index.js && node --check deploy-commands.js && node --check print-invite-url.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "discord.js": "^14.26.3",
+    "dotenv": "^17.4.2"
+  }
+}
