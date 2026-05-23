@@ -1,4 +1,4 @@
-require("dotenv").config();
+﻿require("dotenv").config();
 
 const {
   Client,
@@ -11,52 +11,22 @@ const {
   TextInputBuilder,
   TextInputStyle,
   StringSelectMenuBuilder,
-  PermissionsBitField
+  PermissionsBitField,
+  MessageFlags
 } = require("discord.js");
 
-const fs = require("fs");
-const path = require("path");
-
-const DATA_FILE =
-  process.env.DATA_FILE ||
-  (process.env.RAILWAY_VOLUME_MOUNT_PATH
-    ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, "data.json")
-    : path.join(__dirname, "data.json"));
+const {
+  initStorage,
+  loadData,
+  saveData,
+  getStorageDescription
+} = require("./storage");
 
 const MAX_OPEN_SCRIMS_PER_USER = 3;
 const MAX_OPEN_SCRIMS_PER_GUILD = 20;
 const SCRIM_CREATE_COOLDOWN_MS = 30 * 1000;
 
 const createCooldowns = new Map();
-
-function loadData() {
-  if (!fs.existsSync(DATA_FILE)) {
-    return {
-      scrims: [],
-      results: [],
-      teams: {},
-      teamProfiles: {},
-      pendingSelections: {},
-      guildSettings: {}
-    };
-  }
-
-  const data = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
-
-  if (!data.scrims) data.scrims = [];
-  if (!data.results) data.results = [];
-  if (!data.teams) data.teams = {};
-  if (!data.teamProfiles) data.teamProfiles = {};
-  if (!data.pendingSelections) data.pendingSelections = {};
-  if (!data.guildSettings) data.guildSettings = {};
-
-  return data;
-}
-
-function saveData(data) {
-  fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
-}
 
 function getGuildSettings(data, guildId) {
   if (!data.guildSettings[guildId]) {
@@ -211,7 +181,7 @@ function ensureEnabled(interaction, settings) {
 
   return interaction.reply({
     content: "このサーバーでは現在Bot機能が停止されています。",
-    ephemeral: true
+    flags: MessageFlags.Ephemeral
   });
 }
 
@@ -221,18 +191,18 @@ const client = new Client({
 
 client.once("clientReady", () => {
   console.log(`${client.user.tag} 起動完了`);
-  console.log(`Data file: ${DATA_FILE}`);
+  console.log(`Data store: ${getStorageDescription()}`);
 });
 
 client.on("interactionCreate", async interaction => {
   if (!interaction.guildId) {
     return interaction.reply?.({
       content: "このBotはサーバー内でのみ使用できます。",
-      ephemeral: true
+      flags: MessageFlags.Ephemeral
     }).catch(() => null);
   }
 
-  const data = loadData();
+  const data = await loadData();
   const guildId = interaction.guildId;
   const settings = getGuildSettings(data, guildId);
 
@@ -247,13 +217,13 @@ client.on("interactionCreate", async interaction => {
       if (sub === "登録") {
         const name = interaction.options.getString("name");
         profiles[interaction.user.id] = name;
-        saveData(data);
+        await saveData(data);
 
         await sendLog(client, data, guildId, `📝 チーム登録: <@${interaction.user.id}> → ${name}`);
 
         return interaction.reply({
           content: `チーム名を登録しました：${name}`,
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
@@ -261,19 +231,19 @@ client.on("interactionCreate", async interaction => {
         const name = profiles[interaction.user.id];
         return interaction.reply({
           content: name ? `登録チーム：${name}` : "未登録です。",
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
       if (sub === "削除") {
         delete profiles[interaction.user.id];
-        saveData(data);
+        await saveData(data);
 
         await sendLog(client, data, guildId, `🗑️ チーム登録削除: <@${interaction.user.id}>`);
 
         return interaction.reply({
           content: "登録チーム名を削除しました。",
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
     }
@@ -290,7 +260,7 @@ client.on("interactionCreate", async interaction => {
           const wait = Math.ceil((SCRIM_CREATE_COOLDOWN_MS - (now - lastCreated)) / 1000);
           return interaction.reply({
             content: `連続募集を防止しています。あと${wait}秒待ってください。`,
-            ephemeral: true
+            flags: MessageFlags.Ephemeral
           });
         }
 
@@ -300,14 +270,14 @@ client.on("interactionCreate", async interaction => {
         if (guildOpen.length >= MAX_OPEN_SCRIMS_PER_GUILD) {
           return interaction.reply({
             content: `このサーバーの募集中スクリム数が上限（${MAX_OPEN_SCRIMS_PER_GUILD}件）に達しています。`,
-            ephemeral: true
+            flags: MessageFlags.Ephemeral
           });
         }
 
         if (userOpen.length >= MAX_OPEN_SCRIMS_PER_USER) {
           return interaction.reply({
             content: `同時に作成できる募集は${MAX_OPEN_SCRIMS_PER_USER}件までです。`,
-            ephemeral: true
+            flags: MessageFlags.Ephemeral
           });
         }
 
@@ -319,7 +289,7 @@ client.on("interactionCreate", async interaction => {
         if (timeOptions.length === 0 || mapOptions.length === 0 || modeOptions.length === 0) {
           return interaction.reply({
             content: "時間・マップ・形式は最低1つ以上入力してください。",
-            ephemeral: true
+            flags: MessageFlags.Ephemeral
           });
         }
 
@@ -353,7 +323,7 @@ client.on("interactionCreate", async interaction => {
         };
 
         data.scrims.push(scrim);
-        saveData(data);
+        await saveData(data);
         createCooldowns.set(cooldownKey, now);
 
         const msg = await interaction.reply({
@@ -363,7 +333,7 @@ client.on("interactionCreate", async interaction => {
         });
 
         scrim.messageId = msg.id;
-        saveData(data);
+        await saveData(data);
 
         await sendLog(client, data, guildId, `📢 募集作成 #${id}: ${team} by <@${interaction.user.id}>`);
 
@@ -376,7 +346,7 @@ client.on("interactionCreate", async interaction => {
         if (open.length === 0) {
           return interaction.reply({
             content: "募集中のスクリムはありません。",
-            ephemeral: true
+            flags: MessageFlags.Ephemeral
           });
         }
 
@@ -386,7 +356,7 @@ client.on("interactionCreate", async interaction => {
 
         return interaction.reply({
           content: `【募集中スクリム一覧】\n\n${text}`,
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
@@ -395,26 +365,26 @@ client.on("interactionCreate", async interaction => {
         const scrim = findScrim(data, guildId, id);
 
         if (!scrim) {
-          return interaction.reply({ content: "募集が見つかりません。", ephemeral: true });
+          return interaction.reply({ content: "募集が見つかりません。", flags: MessageFlags.Ephemeral });
         }
 
         if (scrim.hostId !== interaction.user.id) {
-          return interaction.reply({ content: "自分の募集のみ操作できます。", ephemeral: true });
+          return interaction.reply({ content: "自分の募集のみ操作できます。", flags: MessageFlags.Ephemeral });
         }
 
         if (scrim.status !== "募集中") {
-          return interaction.reply({ content: `この募集はすでに「${scrim.status}」です。`, ephemeral: true });
+          return interaction.reply({ content: `この募集はすでに「${scrim.status}」です。`, flags: MessageFlags.Ephemeral });
         }
 
         scrim.status = sub === "キャンセル" ? "キャンセル" : "締切";
-        saveData(data);
+        await saveData(data);
 
         await updateScrimMessage(interaction, scrim);
         await sendLog(client, data, guildId, `${sub === "キャンセル" ? "🚫" : "🔒"} ${sub}: #${id}`);
 
         return interaction.reply({
           content: `#${id} を${sub}しました。`,
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
@@ -423,27 +393,27 @@ client.on("interactionCreate", async interaction => {
         const scrim = findScrim(data, guildId, id);
 
         if (!scrim) {
-          return interaction.reply({ content: "募集が見つかりません。", ephemeral: true });
+          return interaction.reply({ content: "募集が見つかりません。", flags: MessageFlags.Ephemeral });
         }
 
         if (scrim.status !== "募集中") {
-          return interaction.reply({ content: "募集中のスクリムのみ申請取消できます。", ephemeral: true });
+          return interaction.reply({ content: "募集中のスクリムのみ申請取消できます。", flags: MessageFlags.Ephemeral });
         }
 
         const before = scrim.applicants.length;
         scrim.applicants = scrim.applicants.filter(a => a.userId !== interaction.user.id);
 
         if (before === scrim.applicants.length) {
-          return interaction.reply({ content: "この募集には申請していません。", ephemeral: true });
+          return interaction.reply({ content: "この募集には申請していません。", flags: MessageFlags.Ephemeral });
         }
 
-        saveData(data);
+        await saveData(data);
         await updateScrimMessage(interaction, scrim);
         await sendLog(client, data, guildId, `↩️ 申請取消 #${id}: <@${interaction.user.id}>`);
 
         return interaction.reply({
           content: `#${id} への申請を取り消しました。`,
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
@@ -452,26 +422,26 @@ client.on("interactionCreate", async interaction => {
         const scrim = findScrim(data, guildId, id);
 
         if (!scrim) {
-          return interaction.reply({ content: "募集が見つかりません。", ephemeral: true });
+          return interaction.reply({ content: "募集が見つかりません。", flags: MessageFlags.Ephemeral });
         }
 
         if (scrim.status !== "確定") {
-          return interaction.reply({ content: "確定済みスクリムのみキャンセルできます。", ephemeral: true });
+          return interaction.reply({ content: "確定済みスクリムのみキャンセルできます。", flags: MessageFlags.Ephemeral });
         }
 
         if (scrim.hostId !== interaction.user.id && !isStaffOrAdmin(interaction, settings)) {
-          return interaction.reply({ content: "募集者または運営のみキャンセルできます。", ephemeral: true });
+          return interaction.reply({ content: "募集者または運営のみキャンセルできます。", flags: MessageFlags.Ephemeral });
         }
 
         scrim.status = "キャンセル";
-        saveData(data);
+        await saveData(data);
 
         await updateScrimMessage(interaction, scrim);
         await sendLog(client, data, guildId, `❌ 確定キャンセル #${id}`);
 
         return interaction.reply({
           content: `#${id} の確定スクリムをキャンセルしました。`,
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
@@ -480,15 +450,15 @@ client.on("interactionCreate", async interaction => {
         const scrim = findScrim(data, guildId, id);
 
         if (!scrim) {
-          return interaction.reply({ content: "募集が見つかりません。", ephemeral: true });
+          return interaction.reply({ content: "募集が見つかりません。", flags: MessageFlags.Ephemeral });
         }
 
         if (scrim.hostId !== interaction.user.id) {
-          return interaction.reply({ content: "自分の募集のみ編集できます。", ephemeral: true });
+          return interaction.reply({ content: "自分の募集のみ編集できます。", flags: MessageFlags.Ephemeral });
         }
 
         if (scrim.status !== "募集中") {
-          return interaction.reply({ content: "募集中のものだけ編集できます。", ephemeral: true });
+          return interaction.reply({ content: "募集中のものだけ編集できます。", flags: MessageFlags.Ephemeral });
         }
 
         const newTime = interaction.options.getString("time");
@@ -498,7 +468,7 @@ client.on("interactionCreate", async interaction => {
         if (!newTime && !newMap && !newMode) {
           return interaction.reply({
             content: "変更する項目を1つ以上入力してください。",
-            ephemeral: true
+            flags: MessageFlags.Ephemeral
           });
         }
 
@@ -517,13 +487,13 @@ client.on("interactionCreate", async interaction => {
           scrim.mode = scrim.modeOptions.join(" / ");
         }
 
-        saveData(data);
+        await saveData(data);
         await updateScrimMessage(interaction, scrim);
         await sendLog(client, data, guildId, `✏️ 募集編集 #${id}`);
 
         return interaction.reply({
           content: `#${id} を編集しました。`,
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
@@ -533,7 +503,7 @@ client.on("interactionCreate", async interaction => {
         if (done.length === 0) {
           return interaction.reply({
             content: "履歴はありません。",
-            ephemeral: true
+            flags: MessageFlags.Ephemeral
           });
         }
 
@@ -543,7 +513,7 @@ client.on("interactionCreate", async interaction => {
 
         return interaction.reply({
           content: `【スクリム履歴】\n\n${text}`,
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
     }
@@ -567,12 +537,12 @@ client.on("interactionCreate", async interaction => {
       teams[winner].win += 1;
       teams[winner].games += 1;
 
-      saveData(data);
+      await saveData(data);
       await sendLog(client, data, guildId, `🏁 結果登録: ${match} / ${score} / 勝者 ${winner}`);
 
       return interaction.reply({
         content: `結果を記録しました。\n${match}\n${score}\n勝者：${winner}`,
-        ephemeral: true
+        flags: MessageFlags.Ephemeral
       });
     }
 
@@ -581,7 +551,7 @@ client.on("interactionCreate", async interaction => {
       const ranking = Object.entries(teams).sort((a, b) => b[1].win - a[1].win);
 
       if (ranking.length === 0) {
-        return interaction.reply({ content: "ランキングはまだありません。", ephemeral: true });
+        return interaction.reply({ content: "ランキングはまだありません。", flags: MessageFlags.Ephemeral });
       }
 
       const text = ranking.map(([team, r], i) => {
@@ -595,14 +565,14 @@ client.on("interactionCreate", async interaction => {
         .setDescription(text)
         .setTimestamp();
 
-      return interaction.reply({ embeds: [embed], ephemeral: true });
+      return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
     }
 
     if (interaction.commandName === "admin") {
       if (!isStaffOrAdmin(interaction, settings)) {
         return interaction.reply({
           content: "このコマンドは管理者または運営ロールのみ使用できます。",
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
@@ -611,33 +581,33 @@ client.on("interactionCreate", async interaction => {
       if (sub === "ログ設定") {
         const channel = interaction.options.getChannel("channel");
         settings.logChannelId = channel.id;
-        saveData(data);
+        await saveData(data);
 
         return interaction.reply({
           content: `ログチャンネルを ${channel} に設定しました。`,
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
       if (sub === "通知設定") {
         const channel = interaction.options.getChannel("channel");
         settings.notifyChannelId = channel.id;
-        saveData(data);
+        await saveData(data);
 
         return interaction.reply({
           content: `通知チャンネルを ${channel} に設定しました。`,
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
       if (sub === "運営ロール設定") {
         const role = interaction.options.getRole("role");
         settings.staffRoleId = role.id;
-        saveData(data);
+        await saveData(data);
 
         return interaction.reply({
           content: `運営ロールを ${role} に設定しました。`,
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
@@ -649,35 +619,35 @@ client.on("interactionCreate", async interaction => {
             `通知チャンネル：${settings.notifyChannelId ? `<#${settings.notifyChannelId}>` : "未設定"}\n` +
             `運営ロール：${settings.staffRoleId ? `<@&${settings.staffRoleId}>` : "未設定"}\n` +
             `Bot状態：${settings.enabled ? "稼働中" : "停止中"}`,
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
       if (sub === "停止") {
         settings.enabled = false;
-        saveData(data);
+        await saveData(data);
 
-        return interaction.reply({ content: "このサーバーでBot機能を停止しました。", ephemeral: true });
+        return interaction.reply({ content: "このサーバーでBot機能を停止しました。", flags: MessageFlags.Ephemeral });
       }
 
       if (sub === "再開") {
         settings.enabled = true;
-        saveData(data);
+        await saveData(data);
 
-        return interaction.reply({ content: "このサーバーでBot機能を再開しました。", ephemeral: true });
+        return interaction.reply({ content: "このサーバーでBot機能を再開しました。", flags: MessageFlags.Ephemeral });
       }
 
       if (sub === "募集削除") {
         const id = interaction.options.getInteger("id");
         const before = data.scrims.length;
         data.scrims = data.scrims.filter(s => !(s.guildId === guildId && s.id === id));
-        saveData(data);
+        await saveData(data);
 
         if (before === data.scrims.length) {
-          return interaction.reply({ content: `#${id} は見つかりませんでした。`, ephemeral: true });
+          return interaction.reply({ content: `#${id} は見つかりませんでした。`, flags: MessageFlags.Ephemeral });
         }
 
-        return interaction.reply({ content: `#${id} を削除しました。`, ephemeral: true });
+        return interaction.reply({ content: `#${id} を削除しました。`, flags: MessageFlags.Ephemeral });
       }
 
       if (sub === "募集全削除") {
@@ -687,16 +657,16 @@ client.on("interactionCreate", async interaction => {
           if (key.startsWith(`${guildId}_`)) delete data.pendingSelections[key];
         }
 
-        saveData(data);
-        return interaction.reply({ content: "このサーバーの募集をすべて削除しました。", ephemeral: true });
+        await saveData(data);
+        return interaction.reply({ content: "このサーバーの募集をすべて削除しました。", flags: MessageFlags.Ephemeral });
       }
 
       if (sub === "結果全削除") {
         data.results = data.results.filter(r => r.guildId !== guildId);
         data.teams[guildId] = {};
-        saveData(data);
+        await saveData(data);
 
-        return interaction.reply({ content: "このサーバーの結果・ランキングを削除しました。", ephemeral: true });
+        return interaction.reply({ content: "このサーバーの結果・ランキングを削除しました。", flags: MessageFlags.Ephemeral });
       }
 
       if (sub === "全データ削除") {
@@ -709,8 +679,8 @@ client.on("interactionCreate", async interaction => {
           if (key.startsWith(`${guildId}_`)) delete data.pendingSelections[key];
         }
 
-        saveData(data);
-        return interaction.reply({ content: "このサーバーの全データを削除しました。", ephemeral: true });
+        await saveData(data);
+        return interaction.reply({ content: "このサーバーの全データを削除しました。", flags: MessageFlags.Ephemeral });
       }
 
       if (sub === "データ確認") {
@@ -726,7 +696,7 @@ client.on("interactionCreate", async interaction => {
             `結果数：${results.length}\n` +
             `ランキング登録数：${Object.keys(teams).length}\n` +
             `チーム登録数：${Object.keys(profiles).length}`,
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
     }
@@ -741,37 +711,37 @@ client.on("interactionCreate", async interaction => {
     const scrim = findScrim(data, guildId, scrimId);
 
     if (!scrim) {
-      return interaction.reply({ content: "募集が見つかりません。", ephemeral: true });
+      return interaction.reply({ content: "募集が見つかりません。", flags: MessageFlags.Ephemeral });
     }
 
     if (action === "join") {
       if (scrim.status !== "募集中") {
-        return interaction.reply({ content: "この募集は終了しています。", ephemeral: true });
+        return interaction.reply({ content: "この募集は終了しています。", flags: MessageFlags.Ephemeral });
       }
 
       if (Date.now() > scrim.deadline) {
         scrim.status = "期限切れ";
-        saveData(data);
+        await saveData(data);
         await updateScrimMessage(interaction, scrim);
 
-        return interaction.reply({ content: "この募集は期限切れです。", ephemeral: true });
+        return interaction.reply({ content: "この募集は期限切れです。", flags: MessageFlags.Ephemeral });
       }
 
       if (interaction.user.id === scrim.hostId) {
-        return interaction.reply({ content: "自分の募集には申請できません。", ephemeral: true });
+        return interaction.reply({ content: "自分の募集には申請できません。", flags: MessageFlags.Ephemeral });
       }
 
       if (scrim.rejected.includes(interaction.user.id)) {
-        return interaction.reply({ content: "この募集ではすでに拒否されています。", ephemeral: true });
+        return interaction.reply({ content: "この募集ではすでに拒否されています。", flags: MessageFlags.Ephemeral });
       }
 
       if (scrim.applicants.some(a => a.userId === interaction.user.id)) {
-        return interaction.reply({ content: "すでに申請済みです。", ephemeral: true });
+        return interaction.reply({ content: "すでに申請済みです。", flags: MessageFlags.Ephemeral });
       }
 
       const key = makePendingKey(guildId, scrimId, interaction.user.id);
       data.pendingSelections[key] = {};
-      saveData(data);
+      await saveData(data);
 
       const modeSelect = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
@@ -804,7 +774,7 @@ client.on("interactionCreate", async interaction => {
       return interaction.reply({
         content: "形式・時間・マップを選んでから、チーム名入力へ進んでください。",
         components: [modeSelect, timeSelect, mapSelect, nextButton],
-        ephemeral: true
+        flags: MessageFlags.Ephemeral
       });
     }
 
@@ -813,7 +783,7 @@ client.on("interactionCreate", async interaction => {
       const selected = data.pendingSelections[key];
 
       if (!selected || !selected.mode || !selected.time || !selected.map) {
-        return interaction.reply({ content: "形式・時間・マップをすべて選んでください。", ephemeral: true });
+        return interaction.reply({ content: "形式・時間・マップをすべて選んでください。", flags: MessageFlags.Ephemeral });
       }
 
       const profiles = getTeamProfiles(data, guildId);
@@ -837,15 +807,15 @@ client.on("interactionCreate", async interaction => {
 
     if (action === "manage") {
       if (interaction.user.id !== scrim.hostId) {
-        return interaction.reply({ content: "募集者のみ操作できます。", ephemeral: true });
+        return interaction.reply({ content: "募集者のみ操作できます。", flags: MessageFlags.Ephemeral });
       }
 
       if (scrim.status !== "募集中") {
-        return interaction.reply({ content: `この募集は「${scrim.status}」です。`, ephemeral: true });
+        return interaction.reply({ content: `この募集は「${scrim.status}」です。`, flags: MessageFlags.Ephemeral });
       }
 
       if (scrim.applicants.length === 0) {
-        return interaction.reply({ content: "まだ申請はありません。", ephemeral: true });
+        return interaction.reply({ content: "まだ申請はありません。", flags: MessageFlags.Ephemeral });
       }
 
       const applicants = scrim.applicants.slice(0, 5);
@@ -870,42 +840,42 @@ client.on("interactionCreate", async interaction => {
       return interaction.reply({
         content: `#${scrimId} 申請一覧\n\n${list}`,
         components: rows,
-        ephemeral: true
+        flags: MessageFlags.Ephemeral
       });
     }
 
     if (action === "reject") {
       if (interaction.user.id !== scrim.hostId) {
-        return interaction.reply({ content: "募集者のみ操作できます。", ephemeral: true });
+        return interaction.reply({ content: "募集者のみ操作できます。", flags: MessageFlags.Ephemeral });
       }
 
       const applicant = findApplicant(scrim, targetUserId);
       if (!applicant) {
-        return interaction.reply({ content: "申請者が見つかりません。", ephemeral: true });
+        return interaction.reply({ content: "申請者が見つかりません。", flags: MessageFlags.Ephemeral });
       }
 
       scrim.applicants = scrim.applicants.filter(a => a.userId !== targetUserId);
       if (!scrim.rejected.includes(targetUserId)) scrim.rejected.push(targetUserId);
 
-      saveData(data);
+      await saveData(data);
       await updateScrimMessage(interaction, scrim);
       await sendLog(client, data, guildId, `❌ 拒否 #${scrimId}: ${applicant.teamName}`);
 
-      return interaction.reply({ content: `${applicant.teamName} を拒否しました。`, ephemeral: true });
+      return interaction.reply({ content: `${applicant.teamName} を拒否しました。`, flags: MessageFlags.Ephemeral });
     }
 
     if (action === "approve") {
       if (interaction.user.id !== scrim.hostId) {
-        return interaction.reply({ content: "募集者のみ操作できます。", ephemeral: true });
+        return interaction.reply({ content: "募集者のみ操作できます。", flags: MessageFlags.Ephemeral });
       }
 
       if (scrim.status !== "募集中") {
-        return interaction.reply({ content: "この募集は終了しています。", ephemeral: true });
+        return interaction.reply({ content: "この募集は終了しています。", flags: MessageFlags.Ephemeral });
       }
 
       const applicant = findApplicant(scrim, targetUserId);
       if (!applicant) {
-        return interaction.reply({ content: "申請者が見つかりません。", ephemeral: true });
+        return interaction.reply({ content: "申請者が見つかりません。", flags: MessageFlags.Ephemeral });
       }
 
       scrim.status = "確定";
@@ -915,7 +885,7 @@ client.on("interactionCreate", async interaction => {
       scrim.selectedTime = applicant.selectedTime;
       scrim.selectedMap = applicant.selectedMap;
 
-      saveData(data);
+      await saveData(data);
       await updateScrimMessage(interaction, scrim);
       await sendConfirm(client, data, scrim, applicant);
       await sendLog(client, data, guildId, `✅ 承認 #${scrimId}: ${scrim.hostTeam} vs ${applicant.teamName}`);
@@ -924,7 +894,7 @@ client.on("interactionCreate", async interaction => {
         content:
           `${applicant.teamName} を承認しました。\n` +
           `形式：${applicant.selectedMode}\n時間：${applicant.selectedTime}\nマップ：${applicant.selectedMap}`,
-        ephemeral: true
+        flags: MessageFlags.Ephemeral
       });
     }
 
@@ -937,16 +907,16 @@ client.on("interactionCreate", async interaction => {
             `承認されています！\n` +
             `${scrim.hostTeam} vs ${scrim.selectedTeamName}\n` +
             `形式：${scrim.selectedMode}\n時間：${scrim.selectedTime}\nマップ：${scrim.selectedMap}`,
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
       if (scrim.status === "確定" && applicant) {
-        return interaction.reply({ content: "今回は選ばれませんでした。", ephemeral: true });
+        return interaction.reply({ content: "今回は選ばれませんでした。", flags: MessageFlags.Ephemeral });
       }
 
       if (scrim.rejected.includes(interaction.user.id)) {
-        return interaction.reply({ content: "あなたの申請は拒否されました。", ephemeral: true });
+        return interaction.reply({ content: "あなたの申請は拒否されました。", flags: MessageFlags.Ephemeral });
       }
 
       if (applicant) {
@@ -954,11 +924,11 @@ client.on("interactionCreate", async interaction => {
           content:
             `申請中です。\n` +
             `チーム名：${applicant.teamName}\n形式：${applicant.selectedMode}\n時間：${applicant.selectedTime}\nマップ：${applicant.selectedMap}`,
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
-      return interaction.reply({ content: "この募集には申請していません。", ephemeral: true });
+      return interaction.reply({ content: "この募集には申請していません。", flags: MessageFlags.Ephemeral });
     }
   }
 
@@ -975,7 +945,7 @@ client.on("interactionCreate", async interaction => {
     if (action === "selectTime") data.pendingSelections[key].time = interaction.values[0];
     if (action === "selectMap") data.pendingSelections[key].map = interaction.values[0];
 
-    saveData(data);
+    await saveData(data);
 
     const selected = data.pendingSelections[key];
 
@@ -1000,22 +970,22 @@ client.on("interactionCreate", async interaction => {
     const scrim = findScrim(data, guildId, scrimId);
 
     if (!scrim) {
-      return interaction.reply({ content: "募集が見つかりません。", ephemeral: true });
+      return interaction.reply({ content: "募集が見つかりません。", flags: MessageFlags.Ephemeral });
     }
 
     if (scrim.status !== "募集中") {
-      return interaction.reply({ content: "この募集は終了しています。", ephemeral: true });
+      return interaction.reply({ content: "この募集は終了しています。", flags: MessageFlags.Ephemeral });
     }
 
     const key = makePendingKey(guildId, scrimId, interaction.user.id);
     const selected = data.pendingSelections[key];
 
     if (!selected || !selected.mode || !selected.time || !selected.map) {
-      return interaction.reply({ content: "選択データが見つかりません。もう一度申請してください。", ephemeral: true });
+      return interaction.reply({ content: "選択データが見つかりません。もう一度申請してください。", flags: MessageFlags.Ephemeral });
     }
 
     if (scrim.applicants.some(a => a.userId === interaction.user.id)) {
-      return interaction.reply({ content: "すでに申請済みです。", ephemeral: true });
+      return interaction.reply({ content: "すでに申請済みです。", flags: MessageFlags.Ephemeral });
     }
 
     const teamName = interaction.fields.getTextInputValue("teamName");
@@ -1033,7 +1003,7 @@ client.on("interactionCreate", async interaction => {
 
     delete data.pendingSelections[key];
 
-    saveData(data);
+    await saveData(data);
     await updateScrimMessage(interaction, scrim);
     await sendLog(client, data, guildId, `📨 申請 #${scrimId}: ${teamName} by <@${interaction.user.id}>`);
 
@@ -1041,13 +1011,13 @@ client.on("interactionCreate", async interaction => {
       content:
         `参加申請しました。\n` +
         `チーム名：${teamName}\n形式：${selected.mode}\n時間：${selected.time}\nマップ：${selected.map}`,
-      ephemeral: true
+      flags: MessageFlags.Ephemeral
     });
   }
 });
 
 setInterval(async () => {
-  const data = loadData();
+  const data = await loadData();
   const now = Date.now();
 
   let changed = false;
@@ -1103,7 +1073,7 @@ setInterval(async () => {
 
   if (before !== data.scrims.length) changed = true;
 
-  if (changed) saveData(data);
+  if (changed) await saveData(data);
 }, 60 * 1000);
 
 const discordToken = (process.env.TOKEN || process.env.DISCORD_TOKEN || "").trim();
@@ -1113,4 +1083,13 @@ if (!discordToken) {
   process.exit(1);
 }
 
-client.login(discordToken);
+async function start() {
+  await initStorage();
+  await client.login(discordToken);
+}
+
+start().catch(error => {
+  console.error("Bot startup failed:", error);
+  process.exit(1);
+});
+
