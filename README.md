@@ -1,4 +1,4 @@
-# BigUkiUki Scrim Bot
+#  Maching Bot
 
 Discord.js のスクリム募集Botを Railway で公開運用するための構成です。
 
